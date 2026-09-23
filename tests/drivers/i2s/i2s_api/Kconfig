@@ -45,3 +45,12 @@ config I2S_TEST_ALLOW_VARIABLE_OFFSET
 	  If the data offset is not consistent between reads because of
 	  timing variations in the hardware, enable this option to
 	  always recalculate the offset.
+
+config I2S_TEST_MONO
+	bool "Test single-channel (mono) streams"
+	help
+	  Also run the i2s_mono suite: configure the stream with one channel
+	  and loop one sample per frame back, then check that the transfer
+	  takes as long as the frame rate says it should. Enable it on boards
+	  whose driver accepts channels = 1; the suite is not compiled
+	  otherwise.
