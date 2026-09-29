@@ -1,0 +1,15 @@
+identifier: m5stack_timer_camera_x/esp32/procpu
+name: M5Stack Timer Camera X PROCPU
+type: mcu
+arch: xtensa
+toolchain:
+  - zephyr
+supported:
+  - adc
+  - gpio
+  - i2c
+  - regulator
+  - rtc
+  - uart
+  - watchdog
+vendor: m5stack

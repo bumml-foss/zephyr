@@ -1,0 +1,6 @@
+board:
+  name: m5stack_timer_camera_x
+  full_name: M5Stack Timer Camera X
+  vendor: m5stack
+  socs:
+  - name: esp32
