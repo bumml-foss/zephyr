@@ -76,6 +76,38 @@ static inline bool esp32_pin_is_output_capable(uint32_t pin)
 	return ((BIT64(pin) & SOC_GPIO_VALID_OUTPUT_GPIO_MASK) != 0);
 }
 
+static void esp32_pin_apply_pull(uint32_t pin, uint32_t flags)
+{
+#if defined(CONFIG_SOC_SERIES_ESP32)
+	/*
+	 * On ESP32, pads with an RTC function take their pull resistors from
+	 * the RTC IO registers, in digital mode as well. The IO MUX pull bits
+	 * have no effect on them.
+	 */
+	if (rtc_gpio_is_valid_gpio(pin)) {
+		int rtcio_num = rtc_io_num_map[pin];
+
+		if ((flags & ESP32_PULL_UP_FLAG) != 0U) {
+			rtcio_hal_pulldown_disable(rtcio_num);
+			rtcio_hal_pullup_enable(rtcio_num);
+		} else if ((flags & ESP32_PULL_DOWN_FLAG) != 0U) {
+			rtcio_hal_pullup_disable(rtcio_num);
+			rtcio_hal_pulldown_enable(rtcio_num);
+		}
+
+		return;
+	}
+#endif
+
+	if ((flags & ESP32_PULL_UP_FLAG) != 0U) {
+		gpio_ll_pulldown_dis(&GPIO, pin);
+		gpio_ll_pullup_en(&GPIO, pin);
+	} else if ((flags & ESP32_PULL_DOWN_FLAG) != 0U) {
+		gpio_ll_pullup_dis(&GPIO, pin);
+		gpio_ll_pulldown_en(&GPIO, pin);
+	}
+}
+
 static int esp32_pin_apply_config(uint32_t pin, uint32_t flags)
 {
 	gpio_dev_t *const gpio_base = (gpio_dev_t *)DT_REG_ADDR(DT_NODELABEL(gpio0));
@@ -99,18 +131,7 @@ static int esp32_pin_apply_config(uint32_t pin, uint32_t flags)
 	/* Set pin function as GPIO */
 	gpio_ll_func_sel(&GPIO, pin, PIN_FUNC_GPIO);
 
-	/*
-	 * Since we always configure the pin in DIGITAL mode (RTCIO_LL_FUNC_DIGITAL),
-	 * we must use the GPIO module's pull resistors, not the RTC IO pull resistors.
-	 * The RTC IO pull resistors only work when the pin is in RTC mode.
-	 */
-	if (flags & ESP32_PULL_UP_FLAG) {
-		gpio_ll_pulldown_dis(&GPIO, pin);
-		gpio_ll_pullup_en(&GPIO, pin);
-	} else if (flags & ESP32_PULL_DOWN_FLAG) {
-		gpio_ll_pullup_dis(&GPIO, pin);
-		gpio_ll_pulldown_en(&GPIO, pin);
-	}
+	esp32_pin_apply_pull(pin, flags);
 
 	if (flags & ESP32_DIR_OUT_FLAG) {
 		if (!esp32_pin_is_output_capable(pin)) {
