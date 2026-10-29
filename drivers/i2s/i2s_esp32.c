@@ -46,6 +46,7 @@ LOG_MODULE_REGISTER(i2s_esp32, CONFIG_I2S_LOG_LEVEL);
 #define I2S_ESP32_CLK_SRC I2S_CLK_SRC_DEFAULT
 #endif
 #define I2S_ESP32_DMA_BUFFER_MAX_SIZE 4092
+#define I2S_ESP32_STD_SLOTS_PER_FRAME 2
 
 #define I2S_ESP32_NUM_INST_OK          DT_NUM_INST_STATUS_OKAY(espressif_esp32_i2s)
 #define I2S_ESP32_IS_DIR_INST_EN(i, d) DT_INST_DMAS_HAS_NAME(i, d) || DT_INST_IRQ_HAS_NAME(i, d)
@@ -135,15 +136,14 @@ static esp_err_t i2s_esp32_calculate_clock(const struct i2s_config *i2s_cfg, uin
 		mclk_multiple = 384;
 	}
 
+	i2s_hal_clock_info->bclk =
+		i2s_cfg->frame_clk_freq * I2S_ESP32_STD_SLOTS_PER_FRAME * channel_length;
+
 	if (i2s_cfg->options & I2S_OPT_FRAME_CLK_TARGET ||
 	    i2s_cfg->options & I2S_OPT_BIT_CLK_TARGET) {
 		i2s_hal_clock_info->bclk_div = 8;
-		i2s_hal_clock_info->bclk =
-			i2s_cfg->frame_clk_freq * i2s_cfg->channels * channel_length;
 		i2s_hal_clock_info->mclk = i2s_cfg->frame_clk_freq * i2s_hal_clock_info->bclk_div;
 	} else {
-		i2s_hal_clock_info->bclk =
-			i2s_cfg->frame_clk_freq * i2s_cfg->channels * channel_length;
 		i2s_hal_clock_info->mclk = i2s_cfg->frame_clk_freq * mclk_multiple;
 		i2s_hal_clock_info->bclk_div = i2s_hal_clock_info->mclk / i2s_hal_clock_info->bclk;
 	}
@@ -1242,8 +1242,8 @@ static int i2s_esp32_config_check(const struct device *dev, enum i2s_dir dir,
 		return -EINVAL;
 	}
 
-	if (i2s_cfg->channels != 2) {
-		LOG_DBG("Currently only 2 channels are supported");
+	if (i2s_cfg->channels != 1 && i2s_cfg->channels != 2) {
+		LOG_DBG("Channels not supported: %u", (unsigned int)i2s_cfg->channels);
 		return -EINVAL;
 	}
 
@@ -1268,6 +1268,8 @@ static int i2s_esp32_configure(const struct device *dev, enum i2s_dir dir,
 	const struct i2s_esp32_cfg *dev_cfg = dev->config;
 	const struct i2s_esp32_stream *stream;
 	i2s_hal_slot_config_t slot_cfg = {0};
+	i2s_std_slot_mask_t tx_slot_mask;
+	i2s_std_slot_mask_t rx_slot_mask;
 	uint8_t data_format;
 	bool is_target;
 	int err;
@@ -1315,7 +1317,7 @@ static int i2s_esp32_configure(const struct device *dev, enum i2s_dir dir,
 	data_format = i2s_cfg->format & I2S_FMT_DATA_FORMAT_MASK;
 
 	slot_cfg.data_bit_width = i2s_cfg->word_size;
-	slot_cfg.slot_mode = I2S_SLOT_MODE_STEREO;
+	slot_cfg.slot_mode = i2s_cfg->channels == 1 ? I2S_SLOT_MODE_MONO : I2S_SLOT_MODE_STEREO;
 	slot_cfg.slot_bit_width = i2s_cfg->word_size > 16 ? 32 : 16;
 	if (data_format == I2S_FMT_DATA_FORMAT_I2S) {
 		slot_cfg.std.ws_pol = i2s_cfg->format & I2S_FMT_FRAME_CLK_INV ? true : false;
@@ -1339,7 +1341,15 @@ static int i2s_esp32_configure(const struct device *dev, enum i2s_dir dir,
 	}
 
 	slot_cfg.std.ws_width = slot_cfg.slot_bit_width;
-	slot_cfg.std.slot_mask = I2S_STD_SLOT_BOTH;
+	/* TX BOTH is the HAL's copy mode on HW v2; RX BOTH would store both slots. */
+	tx_slot_mask = I2S_STD_SLOT_BOTH;
+	rx_slot_mask = I2S_STD_SLOT_BOTH;
+	if (slot_cfg.slot_mode == I2S_SLOT_MODE_MONO) {
+		rx_slot_mask = I2S_STD_SLOT_LEFT;
+#if SOC_I2S_HW_VERSION_1
+		tx_slot_mask = I2S_STD_SLOT_LEFT;
+#endif /* SOC_I2S_HW_VERSION_1 */
+	}
 #if SOC_I2S_HW_VERSION_1
 	slot_cfg.std.msb_right = true;
 #elif SOC_I2S_HW_VERSION_2
@@ -1364,6 +1374,7 @@ static int i2s_esp32_configure(const struct device *dev, enum i2s_dir dir,
 			rx_is_target = true;
 		}
 
+		slot_cfg.std.slot_mask = rx_slot_mask;
 		i2s_hal_std_set_rx_slot(hal, rx_is_target, &slot_cfg);
 		i2s_hal_set_rx_clock(hal, &i2s_hal_clock_info, I2S_ESP32_CLK_SRC, NULL);
 		i2s_ll_rx_enable_std(hal->dev);
@@ -1376,6 +1387,7 @@ static int i2s_esp32_configure(const struct device *dev, enum i2s_dir dir,
 
 #if I2S_ESP32_IS_DIR_EN(tx)
 	if (dir == I2S_DIR_TX || dir == I2S_DIR_BOTH) {
+		slot_cfg.std.slot_mask = tx_slot_mask;
 		i2s_hal_std_set_tx_slot(hal, is_target, &slot_cfg);
 		i2s_hal_set_tx_clock(hal, &i2s_hal_clock_info, I2S_ESP32_CLK_SRC, NULL);
 		i2s_ll_tx_enable_std(hal->dev);

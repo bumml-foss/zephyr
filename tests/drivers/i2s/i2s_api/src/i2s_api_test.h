@@ -44,5 +44,6 @@ void fill_buf_const(int16_t *tx_block, int16_t val_l, int16_t val_r);
 int verify_buf_const(int16_t *rx_block, int16_t val_l, int16_t val_r);
 
 int configure_stream(const struct device *dev_i2s, enum i2s_dir dir);
+int configure_stream_channels(const struct device *dev_i2s, enum i2s_dir dir, uint8_t channels);
 
 #endif

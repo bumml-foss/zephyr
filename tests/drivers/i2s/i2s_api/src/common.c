@@ -37,54 +37,67 @@ ZTEST_DMEM int16_t data_r[SAMPLE_NO] = {
 	-32767, -30273, -23170, -12540,     -1,
 };
 
+/* The channel count the streams were configured with. fill_buf() and
+ * verify_buf() lay a block out for it: stereo interleaves data_l and data_r,
+ * mono sends data_l then data_r, one sample per frame, so a block of the
+ * same size carries twice the frames.
+ */
+static ZTEST_DMEM uint8_t stream_channels = 2U;
+
+#define WORDS_PER_BLOCK (2 * SAMPLE_NO)
+BUILD_ASSERT(WORDS_PER_BLOCK * sizeof(int16_t) == BLOCK_SIZE);
+
+#if (CONFIG_I2S_TEST_ALLOWED_DATA_OFFSET > 0) && !(CONFIG_I2S_TEST_ALLOW_VARIABLE_OFFSET)
+static ZTEST_DMEM int data_offset = -1;
+#endif
+
+static int16_t expected_sample(int word, int att)
+{
+	if (stream_channels == 2U) {
+		return ((word % 2) != 0 ? data_r[word / 2] : data_l[word / 2]) >> att;
+	}
+
+	return (word < SAMPLE_NO ? data_l[word] : data_r[word - SAMPLE_NO]) >> att;
+}
+
 static void fill_buf(int16_t *tx_block, int att)
 {
-	for (int i = 0; i < SAMPLE_NO; i++) {
-		tx_block[2 * i] = data_l[i] >> att;
-		tx_block[2 * i + 1] = data_r[i] >> att;
+	for (int w = 0; w < WORDS_PER_BLOCK; w++) {
+		tx_block[w] = expected_sample(w, att);
 	}
 }
 
 static int verify_buf(int16_t *rx_block, int att)
 {
-	int sample_no = SAMPLE_NO;
+	int words = WORDS_PER_BLOCK;
 
 #if (CONFIG_I2S_TEST_ALLOWED_DATA_OFFSET > 0)
 #if (CONFIG_I2S_TEST_ALLOW_VARIABLE_OFFSET)
-	int offset = -1;
-#else
-	static ZTEST_DMEM int offset = -1;
+	int data_offset = -1;
 #endif
 
-	if (offset < 0) {
+	if (data_offset < 0) {
 		do {
-			++offset;
-			if (offset > CONFIG_I2S_TEST_ALLOWED_DATA_OFFSET) {
+			++data_offset;
+			if (data_offset > CONFIG_I2S_TEST_ALLOWED_DATA_OFFSET) {
 				TC_PRINT("Allowed data offset exceeded\n");
 				return -TC_FAIL;
 			}
-		} while (rx_block[2 * offset] != data_l[0] >> att);
+		} while (rx_block[stream_channels * data_offset] != expected_sample(0, att));
 
 #if (!CONFIG_I2S_TEST_ALLOW_VARIABLE_OFFSET)
-		TC_PRINT("Using data offset: %d\n", offset);
+		TC_PRINT("Using data offset: %d\n", data_offset);
 #endif
 	}
 
-	rx_block += 2 * offset;
-	sample_no -= offset;
+	rx_block += stream_channels * data_offset;
+	words -= stream_channels * data_offset;
 #endif
 
-	for (int i = 0; i < sample_no; i++) {
-		if (rx_block[2 * i] != data_l[i] >> att) {
-			TC_PRINT("Error: att %d: data_l mismatch at position "
-				 "%d, expected %d, actual %d\n",
-				 att, i, data_l[i] >> att, rx_block[2 * i]);
-			return -TC_FAIL;
-		}
-		if (rx_block[2 * i + 1] != data_r[i] >> att) {
-			TC_PRINT("Error: att %d: data_r mismatch at position "
-				 "%d, expected %d, actual %d\n",
-				 att, i, data_r[i] >> att, rx_block[2 * i + 1]);
+	for (int w = 0; w < words; w++) {
+		if (rx_block[w] != expected_sample(w, att)) {
+			TC_PRINT("Error: att %d: mismatch at word %d, expected %d, actual %d\n",
+				 att, w, expected_sample(w, att), rx_block[w]);
 			return -TC_FAIL;
 		}
 	}
@@ -187,13 +200,21 @@ int rx_block_read(const struct device *dev_i2s, int att)
 	return rx_block_read_slab(dev_i2s, att, &rx_mem_slab);
 }
 
-int configure_stream(const struct device *dev_i2s, enum i2s_dir dir)
+int configure_stream_channels(const struct device *dev_i2s, enum i2s_dir dir, uint8_t channels)
 {
 	int ret;
 	struct i2s_config i2s_cfg = {0};
 
+	if (channels != stream_channels) {
+		stream_channels = channels;
+#if (CONFIG_I2S_TEST_ALLOWED_DATA_OFFSET > 0) && !(CONFIG_I2S_TEST_ALLOW_VARIABLE_OFFSET)
+		/* The offset was found for the other block layout. */
+		data_offset = -1;
+#endif
+	}
+
 	i2s_cfg.word_size = 16U;
-	i2s_cfg.channels = 2U;
+	i2s_cfg.channels = channels;
 	i2s_cfg.format = I2S_FMT_DATA_FORMAT_I2S;
 	i2s_cfg.frame_clk_freq = FRAME_CLK_FREQ;
 	i2s_cfg.block_size = BLOCK_SIZE;
@@ -237,4 +258,9 @@ int configure_stream(const struct device *dev_i2s, enum i2s_dir dir)
 	}
 
 	return TC_PASS;
+}
+
+int configure_stream(const struct device *dev_i2s, enum i2s_dir dir)
+{
+	return configure_stream_channels(dev_i2s, dir, 2U);
 }
